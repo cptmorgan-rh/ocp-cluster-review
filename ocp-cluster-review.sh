@@ -136,10 +136,6 @@ fi
 unset etcd_output_arr
 
 for i in $etcd_pods; do
-    max=0
-    min=9999
-    avg=0
-    count=0
     if grep 'took too long.*expec' "$i" > /dev/null 2>&1;
     then
 
@@ -159,33 +155,59 @@ for i in $etcd_pods; do
         else
           compact_time=$(echo $x | sed 's/ms//')
         fi
-        if [[ $(echo "$compact_time > $max" | bc -l 2>/dev/null) -eq 1 ]];
-        then
-          max=$(echo $compact_time | sed -e 's/[0]*$//g')
-        fi
-        if [[ $(echo "$compact_time > $min" | bc -l 2>/dev/null) -eq 0 ]];
-        then
-          min=$(echo $compact_time | sed -e 's/[0]*$//g')
-        fi
-        count=$(( $count + 1 ))
-        avg=$(echo "$avg + $compact_time" | bc )
+        median_arr+=(${compact_time})
       done
-      printf "Stats about etcd 'took long' messages: $(echo "$i" | awk -F/ '{ print $4 }')\n"
+      printf "Stats about etcd 'took long' messages: $(echo "$i")\n"
       printf "\tFirst Occurance: ${first}\n"
       printf "\tLast Occurance: ${last}\n"
-      printf "\tMax: ${max}ms\n"
-      printf "\tMin: ${min}ms\n"
-      printf "\tAvg: $(echo "$avg/$count" | bc)ms\n"
+      printf "\tMaximum: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.maximum')ms\n"
+      printf "\tMinimum: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.minimum')ms\n"
+      printf "\tMedian: $(echo ${median_arr[@]} | jq -s '{median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.median')ms\n"
+      printf "\tAverage: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.average')ms\n"
       printf "\tExpected: ${expected}\n"
       printf "\n"
+
+      unset median_arr
     fi
 done
 
 for i in $etcd_pods; do
-    max=0
-    min=9999
-    avg=0
-    count=0
+    expected=$(grep -m1 'slow fdatasync' "$i" | grep -o "\{.*\}" | jq -r '."expected-duration"' 2>/dev/null)
+    if grep 'slow fdatasync' "$i" > /dev/null 2>&1;
+    then
+
+      first=$(grep -m1 'slow fdatasync' "$i" 2>/dev/null | awk '{ print $1}')
+      last=$(grep 'slow fdatasync' "$i" 2>/dev/null | tail -n1 | awk '{ print $1}')
+
+      for x in $(grep 'slow fdatasync' "$i" | grep -o "\{.*\}"  | jq -r '.took' 2>/dev/null); do
+        if [[ $x =~ [1-9]m[0-9] ]];
+        then
+          compact_min=$(echo "scale=2;$(echo $x | grep -Eo '[1-9]m' | sed 's/m//')*60000" | bc)
+          compact_sec=$(echo "scale=2;$(echo $x | sed -E 's/[1-9]+m//' | grep -Eo '[1-9]?\.[0-9]+')*1000" | bc)
+          compact_time=$(echo "scale=2;$compact_min + $compact_sec" | bc)
+        elif [[ $x =~ [1-9]s ]];
+        then
+          compact_time=$(echo "scale=2;$(echo $x | sed 's/s//')*1000" | bc)
+        else
+          compact_time=$(echo $x | sed 's/ms//')
+        fi
+        median_arr+=(${compact_time})
+      done
+      printf "Stats about etcd 'slow fdatasync' messages: $(echo "$i")\n"
+      printf "\tFirst Occurance: ${first}\n"
+      printf "\tLast Occurance: ${last}\n"
+      printf "\tMaximum: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.maximum')ms\n"
+      printf "\tMinimum: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.minimum')ms\n"
+      printf "\tMedian: $(echo ${median_arr[@]} | jq -s '{median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.median')ms\n"
+      printf "\tAverage: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.average')ms\n"
+      printf "\tExpected: ${expected}\n"
+      printf "\n"
+
+      unset median_arr
+    fi
+done
+
+for i in $etcd_pods; do
     if grep -m1 "finished scheduled compaction" "$i" | grep '"took"'  > /dev/null 2>&1;
     then
       for x in $(grep "finished scheduled compaction" "$i" | jq -r '.took'); do
@@ -200,22 +222,18 @@ for i in $etcd_pods; do
         else
           compact_time=$(echo $x | sed 's/ms//')
         fi
-        if [[ $(echo "$compact_time > $max" | bc -l) -eq 1 ]];
-        then
-          max=$(echo $compact_time | sed -e 's/[0]*$//g')
-        fi
-        if [[ $(echo "$compact_time > $min" | bc -l) -eq 0 ]];
-        then
-          min=$(echo $compact_time | sed -e 's/[0]*$//g')
-        fi
-        count=$(( $count + 1 ))
-        avg=$(echo "$avg + $compact_time" | bc )
+        median_arr+=(${compact_time})
       done
       printf "etcd DB Compaction times: $(echo "$i")\n"
-      printf "\tMax: ${max}ms\n"
-      printf "\tMin: ${min}ms\n"
-      printf "\tAvg: $(echo "$avg/$count" | bc)ms\n"
+      printf "\tFirst Occurance: ${first}\n"
+      printf "\tLast Occurance: ${last}\n"
+      printf "\tMaximum: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.maximum')ms\n"
+      printf "\tMinimum: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.minimum')ms\n"
+      printf "\tMedian: $(echo ${median_arr[@]} | jq -s '{median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.median')ms\n"
+      printf "\tAverage: $(echo ${median_arr[@]} | jq -s '{minimum:min,maximum:max,average:(add/length),median:(sort|if length%2==1 then.[length/2|floor]else[.[length/2-1,length/2]]|add/2 end)}' | jq -r '.average')ms\n"
       printf "\n"
+
+      unset median_arr
     fi
 done
 
