@@ -116,7 +116,8 @@ fi
 etcd_output_arr=("NAMESPACE|POD|ERROR|COUNT")
 
 # etcd pod errors
-etcd_etcd_errors_arr=("waiting for ReadIndex response took too long" "etcdserver: request timed out" "slow fdatasync" "took too long" "local node might have slow network" "elected leader" "lost leader" "wal: sync duration" "the clock difference against peer" "lease not found" "rafthttp: failed to read" "server is likely overloaded" "failed to send out heartbeat on time" "lost the tcp streaming" "sending buffer is full" "health errors")
+etcd_etcd_errors_arr=("waiting for ReadIndex response took too long, retrying" "etcdserver: request timed out" "slow fdatasync" "\"apply request took too long\"" "\"leader failed to send out heartbeat on time; took too long, leader is overloaded likely from slow disk\"" "local no
+de might have slow network" "elected leader" "lost leader" "wal: sync duration" "the clock difference against peer" "lease not found" "rafthttp: failed to read" "server is likely overloaded" "lost the tcp streaming" "sending buffer is full" "health errors")
 
 for i in $etcd_pods; do
   oc logs pod/"$i" -n openshift-etcd -c etcd > $i
@@ -146,10 +147,15 @@ for i in $etcd_pods; do
       first=$(grep -m1 'took too long.*expec' "$i" 2>/dev/null | grep -o "\{.*\}" | jq -r '.ts')
       last=$(grep 'took too long.*expec' "$i" 2>/dev/null | tail -n1 | grep -o "\{.*\}" | jq -r '.ts')
 
-      for x in $(grep 'took too long.*expec' "$i" | grep -Ev 'leader|waiting for ReadIndex response took too long' | grep -o "\{.*\}"  | jq -r '.took' 2>/dev/null | grep -Ev 'T|Z' 2>/dev/null | grep -Ev '[1-9]m[0-9].*s'); do
-        if [[ $x =~ [1-9]s ]];
+      for x in $(grep 'took too long.*expec' "$i" | grep -Ev 'leader|waiting for ReadIndex response took too long' | grep -o "\{.*\}"  | jq -r '.took' 2>/dev/null | grep -Ev 'T|Z' 2>/dev/null); do
+        if [[ $x =~ [1-9]m[0-9] ]];
         then
-         compact_time=$(echo "scale=2;$(echo $x | sed 's/s//')*1000" | bc)
+          compact_min=$(echo "scale=2;$(echo $x | grep -Eo '[1-9]m' | sed 's/m//')*60000" | bc)
+          compact_sec=$(echo "scale=2;$(echo $x | sed -E 's/[1-9]+m//' | grep -Eo '[1-9]?\.[0-9]+')*1000" | bc)
+          compact_time=$(echo "scale=2;$compact_min + $compact_sec" | bc)
+        elif [[ $x =~ [1-9]s ]];
+        then
+          compact_time=$(echo "scale=2;$(echo $x | sed 's/s//')*1000" | bc)
         else
           compact_time=$(echo $x | sed 's/ms//')
         fi
@@ -182,8 +188,13 @@ for i in $etcd_pods; do
     count=0
     if grep -m1 "finished scheduled compaction" "$i" | grep '"took"'  > /dev/null 2>&1;
     then
-      for x in $(grep "finished scheduled compaction" "$i" | grep -o "\{.*\}"  | sed 's/\\/\\\\/g' | jq -r '.took'); do
-        if [[ $x =~ [1-9]s ]];
+      for x in $(grep "finished scheduled compaction" "$i" | jq -r '.took'); do
+        if [[ $x =~ [1-9]m[0-9] ]];
+        then
+          compact_min=$(echo "scale=2;$(echo $x | grep -Eo '[1-9]m' | sed 's/m//')*60000" | bc)
+          compact_sec=$(echo "scale=2;$(echo $x | sed -E 's/[1-9]+m//' | grep -Eo '[1-9]?\.[0-9]+')*1000" | bc)
+          compact_time=$(echo "scale=2;$compact_min + $compact_sec" | bc)
+        elif [[ $x =~ [1-9]s ]];
         then
           compact_time=$(echo "scale=2;$(echo $x | sed 's/s//')*1000" | bc)
         else
